@@ -1,0 +1,194 @@
+#include<iostream>
+#include<cmath>
+
+// scaling factor and domain definetion //
+const unsigned int scale = 1;
+const unsigned int NX = scale*32;
+const unsigned int NY = NX;
+ 
+// No. of directions //
+const unsigned ndir = 9;
+
+// memory size //
+const size_t mem_size_ndir = sizeof(double)*NX*NY*ndir;
+const size_t mem_size_scalar = sizeof(double)*NX*NY;
+
+// lattice weight and direction //
+const double w0 = 4.0/9.0;
+const double ws = 1.0/9.0;
+const double wd = 1.0/36.0;
+
+const double wi[] = {w0,ws,ws,ws,ws,wd,wd,wd,wd};
+const int dirx[] = {0,1,0,-1,0,1,-1,-1,1};
+const int diry[] = {0,0,1,0,-1,1,1,-1,-1};
+
+// define tau //
+const double nu = 1.0/6.0;
+const double tau = 3.0*nu + 0.5;
+
+// max. flow speed //
+const double u_max = 0.04/scale;
+
+// fluid density and time step //
+const double rho0 = 1.0;
+const unsigned int NSTEPS= 200*scale*scale;
+
+inline size_t scalar_index(unsigned int x,unsigned int y)
+{ 
+  return NX*y+x;
+} 
+
+inline size_t field_index(unsigned int x,unsigned int y,unsigned int d)
+{
+  return NX*(NY*d+y)+x;
+}
+
+void taylor_green(unsigned int t,unsigned int x,unsigned int y,double *r,double *u,double *v)
+{
+ double kx = 2.0*M_PI/NX; // M_PI is a pi i.e, 22/7 //
+ double ky = 2.0*M_PI/NY;
+ double td = 1.0/(nu*(kx*kx+ky*ky));
+
+ double X = x+0.5;
+ double Y = y+0.5;
+ double ux = -u_max*sqrt(ky/kx)*cos(kx*X)*sin(ky*Y)*exp(-1.0*t/td);
+ double uy = u_max*sqrt(kx/ky)*sin(kx*X)*cos(ky*Y)*exp(-1.0*t/td);
+ double P = -0.25*rho0*u_max*u_max*((ky/kx)*cos(2.0*kx*X)+(kx/ky)*cos(2.0*ky*Y))*exp(-2.0*t/td);
+ double rho = rho0+3.0*P;
+
+ *r=rho;
+ *u=ux;
+ *v=uy;
+}
+
+void taylor_green(unsigned int t,double *r,double *u,double *v)
+{
+ for(unsigned int y=0; y<NY; ++y)
+ { 
+  for(unsigned int x=0; x<NX; ++x)
+  {
+   size_t sidx = scalar_index(x,y);
+   taylor_green(t,x,y,&r[sidx],&u[sidx],&v[sidx]);
+  }
+ }
+}
+
+void init_equilibrium(double *f,double *r,double *u,double *v)
+{
+ for(unsigned int y=0; y<NY; ++y)
+ {
+  for(unsigned int x=0; x<NX; ++x)
+  {
+   double rho = r[scalar_index(x,y)];
+   double ux = u[scalar_index(x,y)];
+   double uy = v[scalar_index(x,y)];
+   
+   for(unsigned int i=0; i<ndir; ++i)
+   {
+    double cidotu = dirx[i]*ux + diry[i]*uy;
+    f[field_index(x,y,i)] = wi[i]*rho*(1.0 + 3.0*cidotu + 4.5*cidotu*cidotu - 1.5*(ux*ux+uy*uy));
+   }
+  }
+ }
+}
+
+void stream(double *f_src,double *f_dst)
+{
+ for(unsigned int y=0; y<NY; ++y)
+ {
+  for(unsigned int x=0; x<NX; ++x)
+  {
+   for(unsigned int i=0; i<ndir; ++i)
+   {
+    unsigned int xmd = (NX+x-dirx[i])%NX;
+    unsigned int ymd = (NY+y-diry[i])%NY;
+    
+    f_dst[field_index(x,y,i)] = f_src[field_index(xmd,ymd,i)];
+   }
+  }
+ }
+}
+
+void compute_rho_u(double *f,double *r,double *u,double *v)
+{
+ for(unsigned int y=0; y<NY; ++y)
+ {
+  for(unsigned int x=0; x<NX; ++x)
+  {
+   double rho = 0.0;
+   double ux = 0.;
+   double uy = 0.; 
+   
+   for(unsigned int i=0; i<ndir; ++i)
+   {
+    rho += f[field_index(x,y,i)];
+    ux += dirx[i]*f[field_index(x,y,i)];
+    uy += diry[i]*f[field_index(x,y,i)];
+   }
+   
+   r[scalar_index(x,y)] = rho;
+   u[scalar_index(x,y)] = ux/rho;
+   v[scalar_index(x,y)] = uy/rho;
+  }
+ } 
+}
+
+void collide(double *f,double *r,double *u,double *v)
+{
+ const double tauinv = 2.0/(6.0*nu+1.0);
+ const double omtauinv = 1.0-tauinv;
+
+ for(unsigned int y=0; y<NY; ++y)
+ {
+  for(unsigned int x=0; x<NX; ++x)
+  {
+   double rho = r[scalar_index(x,y)];
+   double ux = u[scalar_index(x,y)];
+   double uy = v[scalar_index(x,y)];
+  
+   for(unsigned int i=0; i<ndir; ++i)
+   {
+    double cidotu = dirx[i]*ux + diry[i]*uy;
+    double feq = wi[i]*rho*(1.0 + 3.0*cidotu + 4.5*cidotu*cidotu -1.5*(ux*ux+uy*uy));
+    f[field_index(x,y,i)] = omtauinv*f[field_index(x,y,i)] + tauinv*feq;
+   }
+  }
+ }
+}
+
+int main(int argc, char *argv[])
+{ // memory allocation //
+ double *f1 = (double*)malloc(mem_size_ndir);
+ double *f2 = (double*)malloc(mem_size_ndir);
+ double *rho = (double*)malloc(mem_size_scalar);
+ double *ux = (double*)malloc(mem_size_scalar);
+ double *uy = (double*)malloc(mem_size_scalar);
+
+ // intialize rho,u and v at t=0 //
+  taylor_green(0,rho,ux,uy);
+
+ // equilibrium f store in f1//
+  init_equilibrium(f1,rho,ux,uy);
+
+ for(unsigned int n=0; n<NSTEPS;++n)
+ {
+  // stream //
+  stream(f1,f2);
+
+  // new values of rho,u and v //
+  compute_rho_u(f2,rho,ux,uy);
+
+  // collision //
+  collide(f2,rho,ux,uy);
+
+  double *temp = f1;
+  f1 = f2;
+  f2 = temp;
+ }
+ free(f1);
+ free(f2);
+ free(rho);
+ free(ux);
+ free(uy);
+ return 0;
+} 
