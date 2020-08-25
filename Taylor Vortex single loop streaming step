@@ -132,7 +132,7 @@ void stream_collide_save(double *f0,double *f1,double *f2,double *r,double *u,do
   double ft3 = f1[field_index(kb,kp,3)];
   double ft4 = f1[field_index(ka,kc,4)];
   double ft5 = f1[field_index(km,kl,5)];
-  double ft6 = f1[field_index(kc,kl,6)];
+  double ft6 = f1[field_index(kb,kl,6)];
   double ft7 = f1[field_index(kb,kc,7)];
   double ft8 = f1[field_index(km,kc,8)];
 
