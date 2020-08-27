@@ -1,0 +1,281 @@
+/***********************************************************************
+This file is the introductory code to the LBM profiler in execution.
+Date: 27082020
+Authors: SD_LBM -> Srishti Shubhani Divyansh Debashis
+ **********************************************************************/
+
+#include<iostream>
+#include<vector>
+#include<fstream>
+#include<cmath>
+
+/************************************************************************
+ Defining variables globally. 
+ ***********************************************************************/ 
+
+// scaling factor and domain definetion //
+const double scale = 1;
+const unsigned int NX = 32*scale;
+const unsigned int NY = NX;
+
+// No. of directions //
+const unsigned int ndir = 9;
+
+std::vector<double> f1(NX*NY*ndir);
+std::vector<double> f2(NX*NY*ndir);
+std::vector<double> f0(NX*NY);
+std::vector<double> rho(NX*NY);
+std::vector<double> ux(NX*NY);
+std::vector<double> uy(NX*NY);
+
+// lattice weight and direction //
+const double w0 = 4.0/9.0;
+const double ws = 1.0/9.0;
+const double wd = 1.0/36.0;
+
+// define tau //
+const double nu = 1.0/6.0;
+const double tau = 3.0*nu + 0.5;
+
+// max. flow speed //
+const double u_max = 0.04/scale;
+
+// fluid density and time step //
+const double rho0 = 1.0;
+const unsigned int NSTEPS = 200*scale*scale;
+
+inline int field_index(unsigned int x,unsigned int y,unsigned int d)
+{
+  return NX*(NY*d+y)+x;
+}
+
+/***************************************************************************
+ Define Class for intialization, stream, collide, save and post-processing
+ **************************************************************************/ 
+
+class LBM_main
+{
+
+public:
+
+LBM_main();
+
+void run();
+
+private:
+
+void initialization();
+
+void stream_collide_save();
+
+void output();
+
+};
+
+/************************************************************************
+ Defining Functions
+ ***********************************************************************/ 
+
+LBM_main::LBM_main()
+{
+
+ std::cout << " initialization of the LBM" << std::endl;
+ 
+}
+
+/************************************************************************
+ Function: Intialization
+ ***********************************************************************/ 
+
+void LBM_main::initialization()
+{
+
+/***** Initialize the member data f, fprop, feq rho, ux, uy, nx, ny *****/
+
+ for(unsigned int k=0; k<NX*NY; ++k)
+ {
+
+  /***** intialization of rho, ux and uy *****/
+  const int ka = k%NY;
+  const int kb = k/NY;
+ 
+  double kx = 2.0*M_PI/NX; 
+  double ky = 2.0*M_PI/NY;
+ 
+  double td = 1.0/(nu*(kx*kx+ky*ky));
+ 
+  /***** t depends on intial time step *****/
+  double t = 0;                
+ 
+  double X = ka+0.5;
+  double Y = kb+0.5;
+  double P = -0.25*rho0*u_max*u_max*((ky/kx)*cos(2.0*kx*X)+(kx/ky)*cos(2.0*ky*Y))*exp(-2.0*t/td);
+
+  rho[k] = rho0+3.0*P;
+
+  ux[k] = -u_max*sqrt(ky/kx)*cos(kx*X)*sin(ky*Y)*exp(-1.0*t/td);
+
+  uy[k] = u_max*sqrt(kx/ky)*sin(kx*X)*cos(ky*Y)*exp(-1.0*t/td);
+ 
+  
+  /***** intialization of f1 and f0 *****/
+  double w0r = w0*rho[k];
+  double wsr = ws*rho[k];
+  double wdr = wd*rho[k];
+ 
+  double tux = 3.0*ux[k];
+  double tuy = 3.0*uy[k];
+ 
+  double omusq = 1.-1.5*(ux[k]*ux[k]+uy[k]*uy[k]);
+
+  f0[k] = w0r*omusq;
+ 
+  double cidot3u = tux;
+  f1[k+NX*NY*1] = wsr*(omusq+cidot3u*(0.5*cidot3u+1)); 
+  f1[k+NX*NY*3] = wsr*(omusq-cidot3u*(-0.5*cidot3u+1));
+ 
+  cidot3u = tuy;
+  f1[k+NX*NY*2] = wsr*(omusq+cidot3u*(0.5*cidot3u+1));  
+  f1[k+NX*NY*4] = wsr*(omusq-cidot3u*(-0.5*cidot3u+1));
+
+  cidot3u = tux+tuy;
+  f1[k+NX*NY*5] = wdr*(omusq+cidot3u*(0.5*cidot3u+1));
+  f1[k+NX*NY*7] = wdr*(omusq-cidot3u*(-0.5*cidot3u+1));
+
+  cidot3u = -tux+tuy;
+  f1[k+NX*NY*6] = wdr*(omusq+cidot3u*(0.5*cidot3u+1));
+  f1[k+NX*NY*8] = wdr*(omusq-cidot3u*(-0.5*cidot3u+1));
+ }
+ 
+ std::cout<< " Check initialization - > Done" << std::endl;
+}
+
+/************************************************************************
+ Function: Stream_collide_save
+ ***********************************************************************/ 
+
+void LBM_main::stream_collide_save()
+{
+
+/***** define constants *****/
+ const double tauinv = 2./(6.*nu+1.0);
+ const double omtauinv = 1-tauinv;
+
+ for(unsigned int k=0; k<NX*NY; ++k)
+ {
+ 
+  /***** streaming *****/
+  const int kp = k/NY;
+  const int ka = k%NY;
+  const int kb = (k+1)%NY;
+  const int kc = (kp+1)%NY;
+  const int km = (NY+k-1)%NY;
+  const int kl = (NY+kp-1)%NY;
+
+  double ft0 = f0[k];
+  
+  double ft1 = f1[field_index(km,kp,1)];
+  double ft2 = f1[field_index(ka,kl,2)];
+  double ft3 = f1[field_index(kb,kp,3)];
+  double ft4 = f1[field_index(ka,kc,4)];
+  double ft5 = f1[field_index(km,kl,5)];
+  double ft6 = f1[field_index(kb,kl,6)];
+  double ft7 = f1[field_index(kb,kc,7)];
+  double ft8 = f1[field_index(km,kc,8)];
+
+  /***** compute rho, ux and uy *****/
+  
+  rho[k] = (ft0+ft1+ft2+ft3+ft4+ft5+ft6+ft7+ft8);
+  double rhoinv = 1.0/rho[k];
+  ux[k] = rhoinv*(ft1+ft5+ft8-(ft3+ft6+ft7));
+  uy[k] = rhoinv*(ft2+ft6+ft5-(ft4+ft7+ft8));
+  
+  /***** collision *****/
+  
+  double tw0r = tauinv*w0*rho[k];
+  double twsr = tauinv*ws*rho[k];
+  double twdr = tauinv*wd*rho[k];
+  
+  double omusq = 1.-1.5*(ux[k]*ux[k]+uy[k]*uy[k]);
+  
+  double tux = 3.0*ux[k];
+  double tuy = 3.0*uy[k];
+  
+  f0[k] = omtauinv*ft0 + tw0r*omusq;
+
+  double cidot3u = tux;
+  f2[k+NX*NY*1] = omtauinv*ft1 + twsr*(omusq+cidot3u*(0.5*cidot3u+1)); 
+  f2[k+NX*NY*3] = omtauinv*ft3 + twsr*(omusq-cidot3u*(-0.5*cidot3u+1));
+
+  cidot3u = tuy;
+  f2[k+NX*NY*2] = omtauinv*ft2 + twsr*(omusq+cidot3u*(0.5*cidot3u+1));  
+  f2[k+NX*NY*4] = omtauinv*ft4 + twsr*(omusq-cidot3u*(-0.5*cidot3u+1));
+
+  cidot3u = tux+tuy;
+  f2[k+NX*NY*5] = omtauinv*ft5 + twdr*(omusq+cidot3u*(0.5*cidot3u+1));
+  f2[k+NX*NY*7] = omtauinv*ft7 + twdr*(omusq-cidot3u*(-0.5*cidot3u+1));
+
+  cidot3u = -tux+tuy;
+  f2[k+NX*NY*6] = omtauinv*ft6 + twdr*(omusq+cidot3u*(0.5*cidot3u+1));
+  f2[k+NX*NY*8] = omtauinv*ft8+ twdr*(omusq-cidot3u*(-0.5*cidot3u+1));
+
+ }
+ std::cout<< " Check collision_stream_save - > Done" << std::endl;
+}
+
+/************************************************************************
+ Function: Output
+ ***********************************************************************/
+
+void LBM_main::output()
+{
+
+ std::ofstream out_rho, out_u, out_v;
+ 
+ /**** creating, opening and writing in file *****/
+ 
+ out_rho.open("rho2_c.txt");
+ out_u.open("u2_c.txt");
+ out_v.open("v2_c.txt");
+ 
+ for(unsigned int k=0; k<NX*NY; ++k)
+ {
+  out_rho << rho[k] << std::endl;
+  out_u << ux[k] << std::endl;
+  out_v << uy[k] << std::endl;
+ }  
+ std::cout<< " Check output - > Done" << std::endl;
+}
+
+/************************************************************************
+ Function: Run(Main Loop)
+ ***********************************************************************/
+
+void LBM_main::run()
+{
+initialization();
+
+ for (unsigned int t_step=0; t_step<NSTEPS ; ++t_step)
+ {
+  stream_collide_save();
+  f1.swap(f2); 
+ }
+ 
+output();
+
+std::cout<< "End of simulation" << std::endl;
+}
+
+/************************************************************************
+ Function: Main function
+ ***********************************************************************/
+
+int main ()
+{
+
+ LBM_main Lbm_main;
+ 
+ Lbm_main.run();
+
+ return 0;
+}
